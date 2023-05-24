@@ -11,6 +11,11 @@
 #include <string.h>
 #include <inttypes.h>
 
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <esp_bt.h>
+#include <esp_gap_ble_api.h>
+
 #include "esp_log.h"
 #include "nvs_flash.h"
 
@@ -51,13 +56,32 @@ typedef struct {
     uint8_t  onoff;
 } esp_ble_mesh_node_info_t;
 
+
+//*****************************************************************************************************************************
+//este array nodes se utiliza para almacenar información sobre los nodos del sistema de malla BLE. Cada elemento del array representa
+//un nodo y contiene información como la dirección unicast, el número de elementos y el estado de encendido/apagado del nodo.
+//*****************************************************************************************************************************
+
 static esp_ble_mesh_node_info_t nodes[CONFIG_BLE_MESH_MAX_PROV_NODES] = {
     [0 ... (CONFIG_BLE_MESH_MAX_PROV_NODES - 1)] = {
         .unicast = ESP_BLE_MESH_ADDR_UNASSIGNED,
         .elem_num = 0,
         .onoff = LED_OFF,
+
     }
 };
+
+
+
+
+
+//*****************************************************************************************************************************
+
+//esta estructura esp_ble_mesh_key se utiliza para almacenar información sobre las claves de red y de aplicación utilizadas en
+//el contexto de la malla BLE. La variable prov_key es una instancia de esta estructura y se utiliza para gestionar y almacenar
+//las claves relacionadas con la provisión de dispositivos en la malla BLE.
+
+//*****************************************************************************************************************************
 
 static struct esp_ble_mesh_key {
     uint16_t net_idx;
@@ -67,6 +91,15 @@ static struct esp_ble_mesh_key {
 
 static esp_ble_mesh_client_t config_client;
 static esp_ble_mesh_client_t onoff_client;
+
+
+//*****************************************************************************************************************************
+
+//esta estructura esp_ble_mesh_cfg_srv_t se utiliza para configurar los parámetros del servidor de configuración en el stack de
+//BLE Mesh. Los campos de la estructura especifican el estado del retransmisor, el estado del beacon, el estado del amigo, el
+//estado del proxy GATT, el TTL predeterminado y los parámetros de transmisión y retransmisión utilizados por el servidor de configuración.
+
+//*****************************************************************************************************************************
 
 static esp_ble_mesh_cfg_srv_t config_server = {
     .relay = ESP_BLE_MESH_RELAY_DISABLED,
@@ -85,13 +118,44 @@ static esp_ble_mesh_cfg_srv_t config_server = {
     /* 3 transmissions with 20ms interval */
     .net_transmit = ESP_BLE_MESH_TRANSMIT(2, 20),
     .relay_retransmit = ESP_BLE_MESH_TRANSMIT(2, 20),
+
 };
+
+
+
+
+
+/*
+ esp_ble_mesh_model_t root_models[]
+
+ define un arreglo de modelos de BLE Mesh llamado root_models. Aquí hay una descripción de cada modelo en el arreglo:
+
+ESP_BLE_MESH_MODEL_CFG_SRV(&config_server): Este modelo representa el servidor de configuración (Configuration Server) y
+se inicializa utilizando la estructura config_server que se proporciona. El servidor de configuración es responsable de proporcionar
+información de configuración y realizar ajustes en la red BLE Mesh.
+
+ESP_BLE_MESH_MODEL_CFG_CLI(&config_client): Este modelo representa el cliente de configuración (Configuration Client) y se inicializa
+utilizando la estructura config_client que se proporciona. El cliente de configuración se utiliza para enviar mensajes de configuración
+al servidor de configuración y recibir respuestas.
+
+ESP_BLE_MESH_MODEL_GEN_ONOFF_CLI(NULL, &onoff_client): Este modelo representa un cliente genérico de encendido/apagado (Generic OnOff Client)
+y se inicializa utilizando la estructura onoff_client que se proporciona. El cliente genérico de encendido/apagado se utiliza para enviar
+comandos de encendido y apagado a los servidores genéricos de encendido/apagado en los nodos de la red BLE Mesh.
+Cabe destacar que estos modelos son modelos raíz, lo que significa que se instancian directamente en el nodo raíz de la red BLE Mesh.
+Dependiendo de los requisitos y la configuración de la aplicación, es posible que se agreguen más modelos a este arreglo para representar
+diferentes funcionalidades en el nodo raíz o en otros nodos de la red.
+ */
 
 static esp_ble_mesh_model_t root_models[] = {
     ESP_BLE_MESH_MODEL_CFG_SRV(&config_server),
-    ESP_BLE_MESH_MODEL_CFG_CLI(&config_client),
+
+	ESP_BLE_MESH_MODEL_CFG_CLI(&config_client),
+
     ESP_BLE_MESH_MODEL_GEN_ONOFF_CLI(NULL, &onoff_client),
 };
+
+
+
 
 static esp_ble_mesh_elem_t elements[] = {
     ESP_BLE_MESH_ELEMENT(0, root_models, ESP_BLE_MESH_MODEL_NONE),
@@ -103,18 +167,39 @@ static esp_ble_mesh_comp_t composition = {
     .element_count = ARRAY_SIZE(elements),
 };
 
+
+
+
+//*****************************************************************************************************************************
+//esta estructura esp_ble_mesh_prov_t se utiliza para configurar los parámetros de provisión utilizados por el stack de BLE Mesh
+//durante el proceso de provisión del dispositivo. Los campos de la estructura especifican el UUID del dispositivo, la dirección
+//unicast, la dirección de inicio, los parámetros de OOB, las banderas y el índice de versión de clave de red.
+//*****************************************************************************************************************************
+
 static esp_ble_mesh_prov_t provision = {
-    .prov_uuid           = dev_uuid,
-    .prov_unicast_addr   = PROV_OWN_ADDR,
-    .prov_start_address  = 0x0005,
-    .prov_attention      = 0x00,
-    .prov_algorithm      = 0x00,
-    .prov_pub_key_oob    = 0x00,
-    .prov_static_oob_val = NULL,
-    .prov_static_oob_len = 0x00,
-    .flags               = 0x00,
-    .iv_index            = 0x00,
+    .prov_uuid           = dev_uuid,  //Es un puntero al arreglo de 16 bytes que contiene el UUID del dispositivo.
+    .prov_unicast_addr   = PROV_OWN_ADDR, //Es la dirección unicast que se utilizará para la provisión del dispositivo.
+    .prov_start_address  = 0x0005, //Es la dirección de inicio que se utilizará para asignar direcciones unicast a los elementos del dispositivo durante la provisión.
+    .prov_attention      = 0x00, //Es un campo reservado para el uso futuro relacionado con la atención durante el proceso de provisión.
+    .prov_algorithm      = 0x00, //Es un campo reservado para el uso futuro relacionado con el algoritmo de provisión utilizado.
+    .prov_pub_key_oob    = 0x00, //Es un campo reservado para el uso futuro relacionado con la clave pública OOB (Out-of-Band) utilizada durante el proceso de provisión.
+    .prov_static_oob_val = NULL, //Es un puntero al arreglo de bytes que contiene el valor de OOB estático utilizado durante el proceso de provisión. En este caso, se establece en NULL, lo que indica que no se utiliza OOB estático.
+    .prov_static_oob_len = 0x00, //Es la longitud del arreglo prov_static_oob_val, en este caso se establece en 0 ya que no se utiliza OOB estático.
+    .flags               = 0x00, // Es un campo reservado para el uso futuro relacionado con las banderas de provisión.
+    .iv_index            = 0x00, //Es el índice de la versión actual de la clave de red utilizada en la red de malla.
+
+
+
 };
+
+
+
+//*****************************************************************************************************************************
+//esta función se utiliza para almacenar la información de un nodo en una estructura de datos interna.
+//Si el nodo ya ha sido almacenado previamente, se actualizan los valores. Si no se encuentra una posición vacía para almacenar
+//el nodo, se devuelve un código de error.
+//*****************************************************************************************************************************
+
 
 static esp_err_t example_ble_mesh_store_node_info(const uint8_t uuid[16], uint16_t unicast,
                                                   uint8_t elem_num, uint8_t onoff_state)
@@ -132,7 +217,7 @@ static esp_err_t example_ble_mesh_store_node_info(const uint8_t uuid[16], uint16
             nodes[i].unicast = unicast;
             nodes[i].elem_num = elem_num;
             nodes[i].onoff = onoff_state;
-            return ESP_OK;
+            return ESP_OK;                       //
         }
     }
 
@@ -147,7 +232,16 @@ static esp_err_t example_ble_mesh_store_node_info(const uint8_t uuid[16], uint16
     }
 
     return ESP_FAIL;
+
+
+
 }
+
+//*****************************************************************************************************************************
+//esta función se utiliza para obtener la información de un nodo específico a partir de su dirección unicast. Devuelve un puntero
+//a la estructura de información del nodo si se encuentra un nodo que coincide con la dirección unicast, o devuelve un puntero nulo
+//si no se encuentra ningún nodo coincidente.
+//*****************************************************************************************************************************
 
 static esp_ble_mesh_node_info_t *example_ble_mesh_get_node_info(uint16_t unicast)
 {
@@ -159,13 +253,28 @@ static esp_ble_mesh_node_info_t *example_ble_mesh_get_node_info(uint16_t unicast
 
     for (i = 0; i < ARRAY_SIZE(nodes); i++) {
         if (nodes[i].unicast <= unicast &&
-                nodes[i].unicast + nodes[i].elem_num > unicast) {
+                nodes[i].unicast + nodes[i].elem_num > unicast)
+
+        {
+        	printf("estado unicast : %d\n",nodes[i].unicast);
+        	printf("estado elemen : %d\n",nodes[i].elem_num);
+        	printf("estado onoff : %d\n",nodes[i].onoff);
             return &nodes[i];
+
         }
     }
 
     return NULL;
 }
+
+
+
+//*****************************************************************************************************************************
+
+//En resumen, esta función se utiliza para configurar los parámetros comunes de un mensaje BLE Mesh para un cliente, como el opcode,
+//el modelo de destino y los parámetros de contexto del mensaje.
+
+//*****************************************************************************************************************************
 
 static esp_err_t example_ble_mesh_set_msg_common(esp_ble_mesh_client_common_param_t *common,
                                                  esp_ble_mesh_node_info_t *node,
@@ -175,18 +284,44 @@ static esp_err_t example_ble_mesh_set_msg_common(esp_ble_mesh_client_common_para
         return ESP_ERR_INVALID_ARG;
     }
 
-    common->opcode = opcode;
-    common->model = model;
-    common->ctx.net_idx = prov_key.net_idx;
-    common->ctx.app_idx = prov_key.app_idx;
-    common->ctx.addr = node->unicast;
-    common->ctx.send_ttl = MSG_SEND_TTL;
-    common->ctx.send_rel = MSG_SEND_REL;
-    common->msg_timeout = MSG_TIMEOUT;
-    common->msg_role = MSG_ROLE;
+   // common = Puntero a una estructura esp_ble_mesh_client_common_param_t, que contiene los parámetros comunes del mensaje.
+
+    //node: Puntero a una estructura esp_ble_mesh_node_info_t, que representa la información del nodo de destino del mensaje.
+
+    common->opcode = opcode; // Valor de 32 bits que representa el opcode (código de operación) del mensaje.
+    common->model = model; //Puntero a una estructura esp_ble_mesh_model_t, que representa el modelo al que se enviará el mensaje.
+    common->ctx.net_idx = prov_key.net_idx; //
+    common->ctx.app_idx = prov_key.app_idx; //
+    common->ctx.addr = node->unicast; //
+    common->ctx.send_ttl = MSG_SEND_TTL; //
+    common->ctx.send_rel = MSG_SEND_REL; //
+    common->msg_timeout = MSG_TIMEOUT; //
+    common->msg_role = MSG_ROLE; //
+
+    printf("opcode: 0x%08lX\n", (unsigned long)common->opcode);
+    printf("model: %p\n", (void*)common->model);
+    printf("net_idx: 0x%04X\n", common->ctx.net_idx);
+    printf("app_idx: 0x%04X\n", common->ctx.app_idx);
+    printf("addr: 0x%04X\n", common->ctx.addr);
+    printf("send_ttl: %d\n", common->ctx.send_ttl);
+    printf("send_rel: %d\n", common->ctx.send_rel);
+    printf("msg_role: %d\n", common->msg_role);
+
 
     return ESP_OK;
+
+
 }
+
+
+//*****************************************************************************************************************************
+//la función prov_complete se encarga de realizar varias operaciones relacionadas con el final del proceso de provisión de un nodo,
+//como establecer el nombre del nodo, almacenar la información del nodo, obtener los datos de composición y enviar mensajes al cliente
+//de configuración.
+//*****************************************************************************************************************************
+
+
+
 
 static esp_err_t prov_complete(int node_idx, const esp_ble_mesh_octet16_t uuid,
                                uint16_t unicast, uint8_t elem_num, uint16_t net_idx)
@@ -220,6 +355,7 @@ static esp_err_t prov_complete(int node_idx, const esp_ble_mesh_octet16_t uuid,
         return ESP_FAIL;
     }
 
+
     example_ble_mesh_set_msg_common(&common, node, config_client.model, ESP_BLE_MESH_MODEL_OP_COMPOSITION_DATA_GET);
     get_state.comp_data_get.page = COMP_DATA_PAGE_0;
     err = esp_ble_mesh_config_client_get_state(&common, &get_state);
@@ -229,11 +365,25 @@ static esp_err_t prov_complete(int node_idx, const esp_ble_mesh_octet16_t uuid,
     }
 
     return ESP_OK;
+
+
 }
+
+
+
+
+
+
+//*****************************************************************************************************************************
+//Estas funciones son útiles para monitorear y registrar eventos relacionados con la apertura y el cierre de enlaces de provisión
+//durante el proceso de provisión de nodos en una red BLE Mesh.
+//*****************************************************************************************************************************
+
 
 static void prov_link_open(esp_ble_mesh_prov_bearer_t bearer)
 {
     ESP_LOGI(TAG, "%s link open", bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT");
+
 }
 
 static void prov_link_close(esp_ble_mesh_prov_bearer_t bearer, uint8_t reason)
@@ -241,6 +391,23 @@ static void prov_link_close(esp_ble_mesh_prov_bearer_t bearer, uint8_t reason)
     ESP_LOGI(TAG, "%s link close, reason 0x%02x",
              bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT", reason);
 }
+
+
+//*****************************************************************************************************************************
+//esta función se encarga de procesar los paquetes de publicidad de dispositivos no provisionados en el contexto de un provisionador
+//en una red BLE Mesh y realizar las acciones necesarias para agregar esos dispositivos a la cola de dispositivos no provisionados y
+//comenzar el proceso de provisión.
+//*****************************************************************************************************************************
+
+
+/*
+dev_uuid: Una matriz de 16 bytes que representa el UUID del dispositivo no provisionado.
+addr: Una matriz de 6 bytes que representa la dirección del dispositivo no provisionado.
+addr_type: El tipo de dirección del dispositivo no provisionado.
+oob_info: Información Out-of-Band (OOB) recibida del dispositivo no provisionado.
+adv_type: El tipo de paquete de publicidad recibido.
+bearer: El tipo de transporte de enlace de provisión utilizado para recibir el paquete de publicidad.
+*/
 
 static void recv_unprov_adv_pkt(uint8_t dev_uuid[16], uint8_t addr[BD_ADDR_LEN],
                                 esp_ble_mesh_addr_type_t addr_type, uint16_t oob_info,
@@ -273,6 +440,66 @@ static void recv_unprov_adv_pkt(uint8_t dev_uuid[16], uint8_t addr[BD_ADDR_LEN],
 
     return;
 }
+
+
+
+
+//*****************************************************************************************************************************
+//la función example_ble_mesh_provisioning_cb es el controlador de eventos para la provisión en una red BLE Mesh. Recibe
+//diferentes eventos relacionados con la provisión y toma acciones específicas en función del tipo de evento.
+//*****************************************************************************************************************************
+
+
+
+/*
+ event: Un valor enumerado de tipo esp_ble_mesh_prov_cb_event_t que indica el tipo de evento ocurrido.
+
+param: Un puntero a una estructura de tipo esp_ble_mesh_prov_cb_param_t que contiene los parámetros asociados con el evento.
+
+Dentro de la función, se utiliza una instrucción switch para determinar el tipo de evento y tomar acciones específicas en función de ese tipo. A continuación se describe el
+manejo de cada evento:
+
+ESP_BLE_MESH_PROVISIONER_PROV_ENABLE_COMP_EVT: Este evento se produce cuando la habilitación de la provisión ha sido completada. Se registra un mensaje informativo utilizando
+ESP_LOGI para mostrar el código de error asociado.
+
+ESP_BLE_MESH_PROVISIONER_PROV_DISABLE_COMP_EVT: Este evento se produce cuando la deshabilitación de la provisión ha sido completada. Se registra un mensaje informativo utilizando
+ESP_LOGI para mostrar el código de error asociado.
+
+ESP_BLE_MESH_PROVISIONER_RECV_UNPROV_ADV_PKT_EVT: Este evento se produce cuando se recibe un paquete de publicidad de un dispositivo no provisionado. Se registra un mensaje informativo
+utilizando ESP_LOGI y se llama a la función recv_unprov_adv_pkt para procesar el paquete de publicidad recibido.
+
+ESP_BLE_MESH_PROVISIONER_PROV_LINK_OPEN_EVT: Este evento se produce cuando se abre un enlace de provisión. Se llama a la función prov_link_open para manejar el evento y se pasa el
+tipo de transporte de enlace de provisión.
+
+ESP_BLE_MESH_PROVISIONER_PROV_LINK_CLOSE_EVT: Este evento se produce cuando se cierra un enlace de provisión. Se llama a la función prov_link_close para manejar el evento y se pasa
+el tipo de transporte de enlace de provisión y el motivo del cierre.
+
+ESP_BLE_MESH_PROVISIONER_PROV_COMPLETE_EVT: Este evento se produce cuando se completa la provisión de un nodo en la red. Se llama a la función prov_complete para manejar el evento y
+se pasan los parámetros asociados, como el índice del nodo, el UUID del dispositivo, la dirección unicast, el número de elementos y el índice de la clave de red.
+
+ESP_BLE_MESH_PROVISIONER_ADD_UNPROV_DEV_COMP_EVT: Este evento se produce cuando se completa la adición de un dispositivo no provisionado a la cola de dispositivos no provisionados.
+Se registra un mensaje informativo utilizando ESP_LOGI para mostrar el código de error asociado.
+
+ESP_BLE_MESH_PROVISIONER_SET_DEV_UUID_MATCH_COMP_EVT: Este evento se produce cuando se completa la configuración del criterio de coincidencia del UUID del dispositivo en el provisionador.
+Se registra un mensaje informativo utilizando ESP_LOGI para mostrar el código de error asociado.
+
+ESP_BLE_MESH_PROVISIONER_SET_NODE_NAME_COMP_EVT: Este evento se produce cuando se completa la configuración del nombre de un nodo en el provisionador. Se registra un mensaje informativo
+utilizando ESP_LOGI para mostrar el código de error asociado. Si el código de error es ESP_OK, se obtiene el nombre del nodo utilizando esp_ble_mesh_provisioner_get_node_name y se
+
+muestra en el registro. El nombre del nodo se muestra junto con el índice del nodo.
+
+ESP_BLE_MESH_PROVISIONER_ADD_LOCAL_APP_KEY_COMP_EVT: Este evento se produce cuando se completa la adición de una clave de aplicación local al provisionador. Se registra un mensaje
+informativo utilizando ESP_LOGI para mostrar el código de error asociado. Si el código de error es ESP_OK, se configura la variable prov_key.app_idx con el índice de la clave de aplicación
+y se realiza la vinculación de la clave de aplicación a un modelo local utilizando esp_ble_mesh_provisioner_bind_app_key_to_local_model.
+
+ESP_BLE_MESH_PROVISIONER_BIND_APP_KEY_TO_MODEL_COMP_EVT: Este evento se produce cuando se completa la vinculación de una clave de aplicación a un modelo en el provisionador. Se registra un
+mensaje informativo utilizando ESP_LOGI para mostrar el código de error asociado.
+
+En el caso predeterminado del switch, no se realiza ninguna acción adicional.
+*/
+
+
+
 
 static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
                                              esp_ble_mesh_prov_cb_param_t *param)
@@ -343,6 +570,35 @@ static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
 
     return;
 }
+
+//*****************************************************************************************************************************
+//la función example_ble_mesh_config_client_cb es el controlador de eventos para el cliente de configuración en una red BLE Mesh.
+//Procesa diferentes eventos relacionados con el cliente de configuración y toma acciones específicas en función del tipo de evento
+//y del opcode asociado.
+//*****************************************************************************************************************************
+
+
+
+/*
+ ESP_BLE_MESH_CFG_CLIENT_GET_STATE_EVT: Este evento se produce cuando se recibe una respuesta a una solicitud de obtener el estado de configuración.
+ El caso de opcode ESP_BLE_MESH_MODEL_OP_COMPOSITION_DATA_GET muestra los datos de composición del nodo y luego realiza una serie de configuraciones
+ adicionales, como agregar una clave de aplicación y vincularla a un modelo.
+
+ESP_BLE_MESH_CFG_CLIENT_SET_STATE_EVT: Este evento se produce cuando se recibe una respuesta a una solicitud de establecer el estado de configuración.
+El caso de opcode ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD muestra el resultado de agregar una clave de aplicación y luego realiza la vinculación de la clave
+de aplicación a un modelo. El caso de opcode ESP_BLE_MESH_MODEL_OP_MODEL_APP_BIND muestra el resultado de vincular el modelo a la clave de aplicación y
+realiza una solicitud adicional para obtener el estado genérico del modelo.
+
+ESP_BLE_MESH_CFG_CLIENT_PUBLISH_EVT: Este evento se produce cuando se publica un mensaje de cliente de configuración. Los casos de opcode
+ESP_BLE_MESH_MODEL_OP_COMPOSITION_DATA_STATUS y ESP_BLE_MESH_MODEL_OP_APP_KEY_STATUS no realizan ninguna acción adicional en este caso.
+
+ESP_BLE_MESH_CFG_CLIENT_TIMEOUT_EVT: Este evento se produce cuando ocurre un tiempo de espera para una solicitud de cliente de configuración.
+En este caso, se realizan acciones adicionales según el opcode correspondiente. Por ejemplo, si el opcode es ESP_BLE_MESH_MODEL_OP_COMPOSITION_DATA_GET,
+se realiza una solicitud adicional para obtener los datos de composición.
+
+En el caso predeterminado del switch, se registra un mensaje de error indicando que no es un evento de mensaje de estado del cliente de configuración válido.
+
+*/
 
 static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t event,
                                               esp_ble_mesh_cfg_client_cb_param_t *param)
@@ -484,6 +740,43 @@ static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t
     }
 }
 
+
+/*
+La función `example_ble_mesh_generic_client_cb` es un controlador de eventos para el cliente genérico en el código del nodo de red Bluetooth Mesh. Maneja diferentes eventos
+relacionados con las operaciones del cliente genérico, como obtener o establecer el estado del modelo genérico OnOff.
+
+
+1. Se obtiene el código de operación y la dirección de destino del mensaje recibido.
+
+2. Se verifica si hay errores en la transmisión del mensaje. Si hay un error, se registra un mensaje de error y se retorna.
+
+3. Se obtiene la información del nodo asociada con la dirección de destino.
+
+4. Se manejan diferentes eventos basados en el evento recibido:
+
+   a. `ESP_BLE_MESH_GENERIC_CLIENT_GET_STATE_EVT`: Se maneja el evento de obtener el estado del modelo genérico OnOff. Se actualiza el estado del nodo y se envía un mensaje
+   de establecimiento del estado para cambiar el estado del LED.
+
+   b. `ESP_BLE_MESH_GENERIC_CLIENT_SET_STATE_EVT`: Se maneja el evento de establecer el estado del modelo genérico OnOff. Se actualiza el estado del nodo.
+
+   c. `ESP_BLE_MESH_GENERIC_CLIENT_PUBLISH_EVT`: Se omite en este caso.
+
+   d. `ESP_BLE_MESH_GENERIC_CLIENT_TIMEOUT_EVT`: Se maneja el evento de tiempo de espera. En caso de tiempo de espera en las operaciones de obtener o establecer el estado, se
+   vuelven a enviar los mensajes correspondientes.
+
+5. Se registran mensajes de información o error según sea necesario.
+
+Puedes utilizar esta función como base y personalizarla según tus necesidades para controlar el LED o realizar otras acciones en respuesta a los eventos del cliente genérico.
+ */
+
+
+
+
+
+
+
+
+
 static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_event_t event,
                                                esp_ble_mesh_generic_client_cb_param_t *param)
 {
@@ -565,6 +858,9 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
             example_ble_mesh_set_msg_common(&common, node, onoff_client.model, ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET);
             set_state.onoff_set.op_en = false;
             set_state.onoff_set.onoff = !node->onoff;
+
+            printf("cambio estado led %d\n",!node->onoff);
+
             set_state.onoff_set.tid = 0;
             err = esp_ble_mesh_generic_client_set_state(&common, &set_state);
             if (err) {
@@ -582,7 +878,32 @@ static void example_ble_mesh_generic_client_cb(esp_ble_mesh_generic_client_cb_ev
         break;
     }
 }
+/*
+La función ble_mesh_init es responsable de inicializar la pila de la red BLE Mesh y configurar el provisionador (provisioner). Aquí está un resumen de las acciones que realiza esta función:
 
+Se inicializan las claves y los índices necesarios para el provisionamiento. Se establece prov_key.net_idx en ESP_BLE_MESH_KEY_PRIMARY, prov_key.app_idx en APP_KEY_IDX y se copia la clave
+de la aplicación en prov_key.app_key.
+
+Se registran los controladores de eventos example_ble_mesh_provisioning_cb, example_ble_mesh_config_client_cb y example_ble_mesh_generic_client_cb para manejar los eventos correspondientes
+en el stack de la red BLE Mesh.
+
+Se llama a esp_ble_mesh_init para inicializar la pila de la red BLE Mesh utilizando las estructuras de datos provision y composition. Si la inicialización no es exitosa, se registra un
+mensaje de error y se devuelve el código de error correspondiente.
+
+Se llama a esp_ble_mesh_provisioner_set_dev_uuid_match para establecer el criterio de coincidencia del identificador único del dispositivo (Device UUID). En este caso, se configura una
+coincidencia fija utilizando el valor {0xdd, 0xdd}.
+
+Se llama a esp_ble_mesh_provisioner_prov_enable para habilitar el provisionamiento en el provisionador. Se especifica que el provisionamiento se realizará mediante anuncios
+(provisioning advertisements) y GATT.
+
+Se llama a esp_ble_mesh_provisioner_add_local_app_key para agregar la clave de la aplicación local al provisionador. Se proporciona la clave de la aplicación, el índice de la red y
+el índice de la clave de la aplicación. Si la adición no tiene éxito, se registra un mensaje de error y se devuelve el código de error correspondiente.
+
+Se registra un mensaje de información indicando que el provisionador de BLE Mesh se ha inicializado correctamente.
+
+Finalmente, se devuelve el código de error err, que indica si hubo algún error durante la inicialización de la red BLE Mesh.
+
+ */
 static esp_err_t ble_mesh_init(void)
 {
     uint8_t match[2] = {0xdd, 0xdd};
@@ -622,8 +943,12 @@ static esp_err_t ble_mesh_init(void)
 
     ESP_LOGI(TAG, "BLE Mesh Provisioner initialized");
 
+
     return err;
 }
+
+
+
 
 void app_main(void)
 {
@@ -644,6 +969,7 @@ void app_main(void)
         return;
     }
 
+
     ble_mesh_get_dev_uuid(dev_uuid);
 
     /* Initialize the Bluetooth Mesh Subsystem */
@@ -651,4 +977,5 @@ void app_main(void)
     if (err) {
         ESP_LOGE(TAG, "Bluetooth mesh init failed (err %d)", err);
     }
+
 }
