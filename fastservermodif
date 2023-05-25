@@ -1,0 +1,1146 @@
+/*
+ * SPDX-FileCopyrightText: 2017 Intel Corporation
+ * SPDX-FileContributor: 2018-2021 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <inttypes.h>
+
+#include "esp_log.h"
+#include "nvs_flash.h"
+#include "nvs.h"
+
+#include "esp_ble_mesh_defs.h"
+#include "esp_ble_mesh_common_api.h"
+#include "esp_ble_mesh_networking_api.h"
+#include "esp_ble_mesh_provisioning_api.h"
+#include "esp_ble_mesh_config_model_api.h"
+#include "esp_ble_mesh_generic_model_api.h"
+#include "esp_ble_mesh_local_data_operation_api.h"
+
+#include "board.h"
+#include "ble_mesh_fast_prov_operation.h"
+#include "ble_mesh_fast_prov_client_model.h"
+#include "ble_mesh_fast_prov_server_model.h"
+#include "ble_mesh_example_init.h"
+
+#define TAG "EXAMPLE"
+
+
+// Definir el nombre del espacio de almacenamiento
+#define NVS_NAMESPACE "Tecit_flash"
+
+// Definir las claves de las variables
+#define VAR1_KEY "variable1"
+#define VAR2_KEY "variable2"
+#define VAR3_KEY "variable3"
+
+
+
+/*
+ las estructuras y configuraciones necesarias para el funcionamiento del servidor y sus modelos asociados.
+
+
+
+- `extern struct _led_state led_state[3];`: Esta línea declara una variable externa llamada `led_state`, que es una matriz de estructuras `_led_state`. La variable `led_state` es utilizada
+para almacenar el estado de los LED RGB.
+
+- `extern struct k_delayed_work send_self_prov_node_addr_timer;`: Esta línea declara una variable externa llamada `send_self_prov_node_addr_timer`. Esta variable se utiliza para programar
+un temporizador que envía la dirección del nodo de provisión al propio nodo.
+
+- `extern bt_mesh_atomic_t fast_prov_cli_flags;`: Esta línea declara una variable externa llamada `fast_prov_cli_flags`. Esta variable se utiliza para almacenar y controlar las banderas de
+estado del cliente de provisión rápida.
+
+- `static uint8_t dev_uuid[16] = { 0xdd, 0xdd };`: Esta línea declara una variable estática llamada `dev_uuid` e inicializa su valor con `{ 0xdd, 0xdd }`. Esta variable se utiliza para
+almacenar el identificador único del dispositivo.
+
+- `static uint8_t prov_start_num = 0;`: Esta línea declara una variable estática llamada `prov_start_num` e inicializa su valor con `0`. Esta variable se utiliza para almacenar el número de
+inicio de la provisión.
+
+- `static bool prov_start = false;`: Esta línea declara una variable estática booleana llamada `prov_start` e inicializa su valor con `false`. Esta variable se utiliza para indicar si se ha
+iniciado la provisión.
+
+- `static const esp_ble_mesh_client_op_pair_t fast_prov_cli_op_pair[] = { ... };`: Esta línea declara una matriz estática llamada `fast_prov_cli_op_pair` que contiene pares de operaciones del
+cliente de provisión rápida. Estos pares de operaciones definen las operaciones de solicitud y respuesta utilizadas en la comunicación entre el cliente y el servidor de provisión rápida.
+
+- `esp_ble_mesh_client_t config_client;`: Esta línea declara una variable llamada `config_client` del tipo `esp_ble_mesh_client_t`. Esta variable se utiliza para almacenar los datos del modelo
+de cliente de configuración.
+
+- `esp_ble_mesh_cfg_srv_t config_server = { ... };`: Esta línea declara una variable llamada `config_server` del tipo `esp_ble_mesh_cfg_srv_t` e inicializa su estructura con la configuración
+del modelo de servidor de configuración.
+
+- `esp_ble_mesh_client_t fast_prov_client = { ... };`: Esta línea declara una variable llamada `fast_prov_client` del tipo `esp_ble_mesh_client_t` e inicializa su estructura con la
+configuración del modelo de cliente de provisión rápida.
+
+- `example_fast_prov_server_t fast_prov_server = { ... };`: Esta línea declara una variable llamada `fast_prov_server` del tipo `example_fast_prov_server_t` e inicializa su estructura con la
+configuración del modelo de servidor de provisión rápida.
+
+- `ESP_BLE_MESH_MODEL_PUB_DEFINE(onoff_pub, 2 + 3, ROLE_FAST_PROV);`: Esta línea define una publicación para el modelo de servidor de encendido/apagado. La publicación se configura con un
+tamaño de 2 + 3 bytes y se asocia al
+
+ rol de provisión rápida.
+
+- `esp_ble_mesh_gen_onoff_srv_t onoff_server = { ... };`: Esta línea declara una variable llamada `onoff_server` del tipo `esp_ble_mesh_gen_onoff_srv_t` e inicializa su estructura con la
+configuración del modelo de servidor de encendido/apagado.
+
+- `static esp_ble_mesh_model_op_t fast_prov_srv_op[] = { ... };`: Esta línea declara una matriz estática llamada `fast_prov_srv_op` que contiene las operaciones admitidas por el modelo de
+servidor de provisión rápida.
+
+- `static esp_ble_mesh_model_op_t fast_prov_cli_op[] = { ... };`: Esta línea declara una matriz estática llamada `fast_prov_cli_op` que contiene las operaciones admitidas por el modelo de
+cliente de provisión rápida.
+
+- `static esp_ble_mesh_model_t root_models[] = { ... };`: Esta línea declara una matriz estática llamada `root_models` que contiene los modelos asociados al elemento raíz.
+
+- `static esp_ble_mesh_model_t vnd_models[] = { ... };`: Esta línea declara una matriz estática llamada `vnd_models` que contiene los modelos vendor (proveedor) asociados al elemento raíz.
+
+- `static esp_ble_mesh_elem_t elements[] = { ... };`: Esta línea declara una matriz estática llamada `elements` que contiene los elementos de la composición. Cada elemento tiene asociados
+los modelos definidos anteriormente.
+
+- `static esp_ble_mesh_comp_t comp = { ... };`: Esta línea declara una variable llamada `comp` del tipo `esp_ble_mesh_comp_t` e inicializa su estructura con la configuración de la composición.
+La estructura contiene el identificador del fabricante, los elementos de la composición y el número de elementos.
+
+- `static esp_ble_mesh_prov_t prov = { ... };`: Esta línea declara una variable llamada `prov` del tipo `esp_ble_mesh_prov_t` e inicializa su estructura con la configuración del proceso de
+provisión. La estructura contiene información como el UUID del dispositivo, las acciones de salida, el tamaño de salida, etc.
+
+En resumen, este código establece las configuraciones y estructuras necesarias para el funcionamiento del servidor de provisión rápida y sus modelos asociados. Proporciona información sobre
+la configuración del servidor y el cliente de provisión rápida, los modelos de servidor y cliente asociados, las operaciones admitidas y otros parámetros relevantes.
+ */
+
+
+extern struct _led_state led_state[3];
+extern struct k_delayed_work send_self_prov_node_addr_timer;
+extern bt_mesh_atomic_t fast_prov_cli_flags;
+
+static uint8_t dev_uuid[16] = { 0xdd, 0xdd };
+static uint8_t prov_start_num = 0;
+static bool prov_start = false;
+
+static const esp_ble_mesh_client_op_pair_t fast_prov_cli_op_pair[] = {
+    { ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_SET,      ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_STATUS      },
+    { ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_ADD,   ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_STATUS   },
+    { ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR,     ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_ACK    },
+    { ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_GET, ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_STATUS },
+};
+
+/* Configuration Client Model user_data */
+esp_ble_mesh_client_t config_client;
+
+/* Configuration Server Model user_data */
+esp_ble_mesh_cfg_srv_t config_server = {
+    .relay = ESP_BLE_MESH_RELAY_ENABLED,
+    .beacon = ESP_BLE_MESH_BEACON_DISABLED,
+#if defined(CONFIG_BLE_MESH_FRIEND)
+    .friend_state = ESP_BLE_MESH_FRIEND_ENABLED,
+#else
+    .friend_state = ESP_BLE_MESH_FRIEND_NOT_SUPPORTED,
+#endif
+#if defined(CONFIG_BLE_MESH_GATT_PROXY_SERVER)
+    .gatt_proxy = ESP_BLE_MESH_GATT_PROXY_ENABLED,
+#else
+    .gatt_proxy = ESP_BLE_MESH_GATT_PROXY_NOT_SUPPORTED,
+#endif
+    .default_ttl = 7,
+    /* 3 transmissions with 20ms interval */
+    .net_transmit = ESP_BLE_MESH_TRANSMIT(2, 20),
+    .relay_retransmit = ESP_BLE_MESH_TRANSMIT(2, 20),
+};
+
+/* Fast Prov Client Model user_data */
+esp_ble_mesh_client_t fast_prov_client = {
+    .op_pair_size = ARRAY_SIZE(fast_prov_cli_op_pair),
+    .op_pair = fast_prov_cli_op_pair,
+};
+
+/* Fast Prov Server Model user_data */
+example_fast_prov_server_t fast_prov_server = {
+    .primary_role  = false,
+    .max_node_num  = 6,
+    .prov_node_cnt = 0x0,
+    .unicast_min   = ESP_BLE_MESH_ADDR_UNASSIGNED,
+    .unicast_max   = ESP_BLE_MESH_ADDR_UNASSIGNED,
+    .unicast_cur   = ESP_BLE_MESH_ADDR_UNASSIGNED,
+    .unicast_step  = 0x0,
+    .flags         = 0x0,
+    .iv_index      = 0x0,
+    .net_idx       = ESP_BLE_MESH_KEY_UNUSED,
+    .app_idx       = ESP_BLE_MESH_KEY_UNUSED,
+    .group_addr    = ESP_BLE_MESH_ADDR_UNASSIGNED,
+    .prim_prov_addr = ESP_BLE_MESH_ADDR_UNASSIGNED,
+    .match_len     = 0x0,
+    .pend_act      = FAST_PROV_ACT_NONE,
+    .state         = STATE_IDLE,
+};
+
+ESP_BLE_MESH_MODEL_PUB_DEFINE(onoff_pub, 2 + 3, ROLE_FAST_PROV);
+static esp_ble_mesh_gen_onoff_srv_t onoff_server = {
+    .rsp_ctrl.get_auto_rsp = ESP_BLE_MESH_SERVER_AUTO_RSP,
+    .rsp_ctrl.set_auto_rsp = ESP_BLE_MESH_SERVER_AUTO_RSP,
+};
+
+static esp_ble_mesh_model_op_t fast_prov_srv_op[] = {
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_SET,          3),
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_ADD,      16),
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR,         2),
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_GET,     0),
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_GROUP_ADD,    2),
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_GROUP_DELETE, 2),
+    ESP_BLE_MESH_MODEL_OP_END,
+};
+
+static esp_ble_mesh_model_op_t fast_prov_cli_op[] = {
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_STATUS,    1),
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_STATUS, 2),
+    ESP_BLE_MESH_MODEL_OP(ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_ACK,  0),
+    ESP_BLE_MESH_MODEL_OP_END,
+};
+
+static esp_ble_mesh_model_t root_models[] = {
+    ESP_BLE_MESH_MODEL_CFG_SRV(&config_server),
+    ESP_BLE_MESH_MODEL_CFG_CLI(&config_client),
+    ESP_BLE_MESH_MODEL_GEN_ONOFF_SRV(&onoff_pub, &onoff_server),
+};
+
+static esp_ble_mesh_model_t vnd_models[] = {
+    ESP_BLE_MESH_VENDOR_MODEL(CID_ESP, ESP_BLE_MESH_VND_MODEL_ID_FAST_PROV_SRV,
+    fast_prov_srv_op, NULL, &fast_prov_server),
+    ESP_BLE_MESH_VENDOR_MODEL(CID_ESP, ESP_BLE_MESH_VND_MODEL_ID_FAST_PROV_CLI,
+    fast_prov_cli_op, NULL, &fast_prov_client),
+};
+
+static esp_ble_mesh_elem_t elements[] = {
+    ESP_BLE_MESH_ELEMENT(0, root_models, vnd_models),
+};
+
+static esp_ble_mesh_comp_t comp = {
+    .cid           = CID_ESP,
+    .elements      = elements,
+    .element_count = ARRAY_SIZE(elements),
+};
+
+static esp_ble_mesh_prov_t prov = {
+    .uuid                = dev_uuid,
+    .output_size         = 0,
+    .output_actions      = 0,
+    .prov_attention      = 0x00,
+    .prov_algorithm      = 0x00,
+    .prov_pub_key_oob    = 0x00,
+    .prov_static_oob_val = NULL,
+    .prov_static_oob_len = 0x00,
+    .flags               = 0x00,
+    .iv_index            = 0x00,
+};
+
+static void example_change_led_state(uint8_t onoff)
+{
+    struct _led_state *led = &led_state[1];  // led que enciende despues que se provisiona [0] led1 [1] led2 [2] led3
+
+    board_led_operation(led->pin, onoff);
+
+    /* When the node receives the first Generic OnOff Get/Set/Set Unack message, it will
+     * start the timer used to disable fast provisioning functionality.
+     */
+#pragma GCC diagnostic push
+#if     __GNUC__ >= 9
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
+#endif
+    if (!bt_mesh_atomic_test_and_set_bit(fast_prov_server.srv_flags, DISABLE_FAST_PROV_START)) {
+        k_delayed_work_submit(&fast_prov_server.disable_fast_prov_timer, DISABLE_FAST_PROV_TIMEOUT);
+    }
+#pragma GCC diagnostic pop
+
+}
+
+/*
+La función `node_prov_complete` se utiliza para manejar la finalización exitosa de la provisión de un nodo en una red de malla Bluetooth. A continuación se explica el significado de los
+parámetros y las acciones realizadas por la función:
+
+- `net_idx`: Es el índice de la clave de red asignada al nodo provisionado. Este parámetro indica qué clave de red se utilizará para encriptar y desencriptar los mensajes de la red de malla.
+
+- `addr`: Es la dirección unicast asignada al nodo provisionado. La dirección unicast es la dirección única que identifica de manera única al nodo dentro de la red de malla.
+
+- `flags`: Son las banderas o indicadores asociados al nodo provisionado. Estas banderas pueden contener información adicional sobre el estado o las características del nodo.
+
+- `iv_index`: Es el índice de vector de inicialización (IV index) utilizado en la red de malla. El IV index es un valor utilizado en el proceso de encriptación y desencriptación de los
+mensajes de la red para garantizar la seguridad y privacidad
+de la comunicación.
+
+Dentro de la función, se utilizan las macros `ESP_LOGI` para imprimir información de registro. Estas macros imprimen mensajes de información que contienen los valores de `net_idx`, `addr`,
+`flags` e `iv_index`.
+
+Luego, se llama a la función `board_prov_complete()`, que probablemente realiza acciones específicas de la placa o la aplicación cuando se completa la provisión del nodo.
+
+Finalmente, se actualiza el valor de `net_idx` en la estructura `fast_prov_server`, que representa el modelo de servidor Fast Prov en el nodo. Esta actualización asegura que el modelo
+Fast Prov utilice el `net_idx` correcto para su funcionamiento.
+
+En resumen, esta función registra información de provisión en los registros del sistema, realiza acciones de finalización relacionadas con la placa o la aplicación, y actualiza el
+`net_idx` utilizado por el modelo Fast Prov en el nodo provisionado.
+ */
+
+
+
+static void node_prov_complete(uint16_t net_idx, uint16_t addr, uint8_t flags, uint32_t iv_index)
+{
+    ESP_LOGI(TAG, "net_idx: 0x%04x, unicast_addr: 0x%04x", net_idx, addr);
+    ESP_LOGI(TAG, "flags: 0x%02x, iv_index: 0x%08" PRIx32, flags, iv_index);
+    board_prov_complete();
+    /* Updates the net_idx used by Fast Prov Server model, and it can also
+     * be updated if the Fast Prov Info Set message contains a valid one.
+     */
+    fast_prov_server.net_idx = net_idx;
+}
+
+
+/*
+ La función `provisioner_prov_link_open` se utiliza para manejar la apertura de una conexión de enlace durante el proceso de provisión en un provisionador en una red de malla Bluetooth.
+ A continuación se explica el significado de los parámetros y las acciones realizadas por la función:
+
+- `bearer`: Es el tipo de transportador (bearer) utilizado para la provisión. Puede ser `ESP_BLE_MESH_PROV_ADV` o `ESP_BLE_MESH_PROV_GATT`, que representan los transportadores de Publicidad
+(PB-ADV) y GATT (PB-GATT), respectivamente. El transportador determina cómo se lleva a cabo la comunicación entre el provisionador y el nodo que se está provisionando.
+
+Dentro de la función, se utiliza la macro `ESP_LOGI` para imprimir información de registro. Esta macro imprime un mensaje de información que muestra el tipo de transportador utilizado en la
+provisión.
+
+Por ejemplo, si el transportador es `ESP_BLE_MESH_PROV_ADV`, se imprimirá el siguiente mensaje: "provisioner_prov_link_open: bearer PB-ADV". Si el transportador es `ESP_BLE_MESH_PROV_GATT`,
+se imprimirá: "provisioner_prov_link_open: bearer PB-GATT".
+
+En resumen, esta función registra información de apertura de conexión de enlace en los registros del sistema, indicando qué tipo de transportador se está utilizando en el proceso de provisión.
+ */
+
+
+
+
+static void provisioner_prov_link_open(esp_ble_mesh_prov_bearer_t bearer)
+{
+    ESP_LOGI(TAG, "%s: bearer %s", __func__, bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT");
+}
+
+
+
+
+
+static void provisioner_prov_link_close(esp_ble_mesh_prov_bearer_t bearer, uint8_t reason)
+{
+    ESP_LOGI(TAG, "%s: bearer %s, reason 0x%02x", __func__,
+             bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT", reason);
+    if (prov_start_num) {
+        prov_start_num--;
+    }
+}
+
+
+
+/*
+La función `provisioner_prov_complete` se utiliza para manejar el evento de finalización de la provisión de un nodo por parte de un provisionador en una red de malla Bluetooth.
+A continuación se explica el significado de los parámetros y las acciones realizadas por la función:
+
+- `node_idx`: El índice del nodo que se ha provisionado. Este parámetro no se utiliza en la función.
+- `uuid`: El identificador único del nodo que se ha provisionado. Es un arreglo de 16 bytes.
+- `unicast_addr`: La dirección unicast asignada al nodo provisionado.
+- `element_num`: El número de elementos del nodo provisionado.
+- `net_idx`: El índice de la clave de red utilizada por el nodo provisionado.
+
+Dentro de la función, se realizan las siguientes acciones:
+
+1. Se verifica si el nodo ya existe en la base de datos utilizando su UUID. Si el nodo no existe, se incrementa el contador de nodos provisionados en `fast_prov_server.prov_node_cnt`.
+2. Se imprime el UUID del dispositivo y la dirección unicast asignada para fines de registro.
+3. Se almacena la información del nodo en la base de datos. Se utiliza la función `example_store_node_info` para guardar el UUID, la dirección unicast, el número de elementos, el índice de
+red y otros datos asociados con el nodo.
+4. Se recupera la información del nodo almacenada en la base de datos utilizando la dirección unicast.
+5. Si el provisionador es el principal (provisionado por el teléfono), se realizan las siguientes acciones:
+   - Se almacena la dirección del nodo en la lista de direcciones de nodo remoto utilizando la función `example_store_remote_node_address`.
+   - Si el recuento de direcciones de nodo `fast_prov_server.node_addr_cnt` es mayor que `FAST_PROV_NODE_COUNT_MIN` y menor o igual que `fast_prov_server.max_node_num`, se realiza lo
+   siguiente:
+     - Se verifica si se ha activado la bandera `GATT_PROXY_ENABLE_START` y se cancela el temporizador de habilitación del proxy GATT si está en marcha.
+     - Se establece la bandera `GATT_PROXY_ENABLE_START` y se inicia el temporizador de habilitación del proxy GATT utilizando la función `k_delayed_work_submit`.
+6. Si el provisionador no es el principal, se realiza la siguiente acción:
+   - Si la bandera `SEND_SELF_PROV_NODE_ADDR_START` está activada, se cancela el temporizador de envío de direcciones de nodo al principal si está en marcha.
+   - Se establece la bandera `SEND_SELF_PROV_NODE_ADDR_START` y se inicia el temporizador de envío de direcciones de nodo al principal utilizando la función `k_delayed_work_submit`.
+7. Se verifica si la bandera `DISABLE_FAST_PROV_START` está activada en el provisionador. Si es así, se cancela el temporizador de desactivación de la funcionalidad de provisión si está en
+marcha y se inicia el temporizador utilizando la función `k_delayed_work_submit`.
+8. Se envía un mensaje de Config AppKey Add al nodo utilizando la función `example_send_config_appkey_add`. Esto se realiza para agregar una clave de aplicación al nodo provisto.
+
+En resumen, esta función maneja la finalización de la provisión de un nodo por parte de un provisionador en una red de malla Bluetooth. Realiza varias acciones, incluido el almacenamiento de
+información del nodo, el manejo
+ */
+
+
+static void provisioner_prov_complete(int node_idx, const uint8_t uuid[16], uint16_t unicast_addr,
+                                      uint8_t element_num, uint16_t net_idx)
+{
+    example_node_info_t *node = NULL;
+    esp_err_t err;
+
+    if (example_is_node_exist(uuid) == false) {
+        fast_prov_server.prov_node_cnt++;
+    }
+
+    ESP_LOG_BUFFER_HEX("Device uuid", uuid + 2, 6);
+    ESP_LOGI(TAG, "Unicast address 0x%04x", unicast_addr);
+
+    /* Sets node info */
+    err = example_store_node_info(uuid, unicast_addr, element_num, net_idx,
+                                  fast_prov_server.app_idx, LED_OFF);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s: Failed to set node info", __func__);
+        return;
+    }
+
+    /* Gets node info */
+    node = example_get_node_info(unicast_addr);
+    if (!node) {
+        ESP_LOGE(TAG, "%s: Failed to get node info", __func__);
+        return;
+    }
+
+    if (fast_prov_server.primary_role == true) {
+        /* If the Provisioner is the primary one (i.e. provisioned by the phone), it shall
+         * store self-provisioned node addresses;
+         * If the node_addr_cnt configured by the phone is small than or equal to the
+         * maximum number of nodes it can provision, it shall reset the timer which is used
+         * to send all node addresses to the phone.
+         */
+        err = example_store_remote_node_address(unicast_addr);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "%s: Failed to store node address 0x%04x", __func__, unicast_addr);
+            return;
+        }
+        if (fast_prov_server.node_addr_cnt != FAST_PROV_NODE_COUNT_MIN &&
+            fast_prov_server.node_addr_cnt <= fast_prov_server.max_node_num) {
+#pragma GCC diagnostic push
+#if     __GNUC__ >= 9
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
+#endif
+            if (bt_mesh_atomic_test_and_clear_bit(fast_prov_server.srv_flags, GATT_PROXY_ENABLE_START)) {
+                k_delayed_work_cancel(&fast_prov_server.gatt_proxy_enable_timer);
+            }
+            if (!bt_mesh_atomic_test_and_set_bit(fast_prov_server.srv_flags, GATT_PROXY_ENABLE_START)) {
+                k_delayed_work_submit(&fast_prov_server.gatt_proxy_enable_timer, GATT_PROXY_ENABLE_TIMEOUT);
+            }
+#pragma GCC diagnostic pop
+        }
+    } else {
+        /* When a device is provisioned, the non-primary Provisioner shall reset the timer
+         * which is used to send node addresses to the primary Provisioner.
+         */
+        if (bt_mesh_atomic_test_and_clear_bit(&fast_prov_cli_flags, SEND_SELF_PROV_NODE_ADDR_START)) {
+            k_delayed_work_cancel(&send_self_prov_node_addr_timer);
+        }
+        if (!bt_mesh_atomic_test_and_set_bit(&fast_prov_cli_flags, SEND_SELF_PROV_NODE_ADDR_START)) {
+            k_delayed_work_submit(&send_self_prov_node_addr_timer, SEND_SELF_PROV_NODE_ADDR_TIMEOUT);
+        }
+    }
+
+#pragma GCC diagnostic push
+#if     __GNUC__ >= 9
+#pragma GCC diagnostic ignored "-Waddress-of-packed-member"
+#endif
+    if (bt_mesh_atomic_test_bit(fast_prov_server.srv_flags, DISABLE_FAST_PROV_START)) {
+        /* When a device is provisioned, and the stop_prov flag of the Provisioner has been
+         * set, the Provisioner shall reset the timer which is used to stop the provisioner
+         * functionality.
+         */
+        k_delayed_work_cancel(&fast_prov_server.disable_fast_prov_timer);
+        k_delayed_work_submit(&fast_prov_server.disable_fast_prov_timer, DISABLE_FAST_PROV_TIMEOUT);
+    }
+#pragma GCC diagnostic pop
+
+    /* The Provisioner will send Config AppKey Add to the node. */
+    example_msg_common_info_t info = {
+        .net_idx = node->net_idx,
+        .app_idx = node->app_idx,
+        .dst = node->unicast_addr,
+        .timeout = 0,
+        .role = ROLE_FAST_PROV,
+    };
+    err = example_send_config_appkey_add(config_client.model, &info, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s: Failed to send Config AppKey Add message", __func__);
+        return;
+    }
+}
+
+
+/*
+La función `example_recv_unprov_adv_pkt` se utiliza para manejar la recepción de paquetes de publicidad de dispositivos no provisionados durante el proceso de provisión rápida en una red de
+malla Bluetooth. A continuación, se explica el significado de los parámetros y las acciones realizadas por la función:
+
+- `dev_uuid`: El identificador único del dispositivo no provisionado. Es un arreglo de 16 bytes.
+- `addr`: La dirección del dispositivo no provisionado. Es un arreglo de 6 bytes.
+- `addr_type`: El tipo de dirección del dispositivo no provisionado.
+- `oob_info`: Información de Out-of-Band (OOB) del dispositivo no provisionado.
+- `adv_type`: El tipo de publicidad del dispositivo no provisionado.
+- `bearer`: El tipo de transporte utilizado para la provisión del dispositivo no provisionado.
+
+Dentro de la función, se realizan las siguientes acciones:
+
+1. Se verifica si la provisión está en curso (`prov_start`) y si el tipo de transporte es PB-ADV (publicidad). En la provisión rápida, el provisionador solo debe usar PB-ADV para provisionar
+dispositivos.
+2. Se verifica si el dispositivo es un dispositivo reprovisionado. Si el dispositivo no existe en la base de datos de nodos, se realiza una verificación adicional para asegurarse de que el
+número máximo de nodos no se haya alcanzado tanto en `prov_start_num` como en `fast_prov_server.prov_node_cnt`.
+3. Se configuran los campos de la estructura `esp_ble_mesh_unprov_dev_add_t` que se utilizará para agregar el dispositivo no provisionado.
+4. Se utiliza la función `esp_ble_mesh_provisioner_add_unprov_dev` para agregar el dispositivo no provisionado y comenzar el proceso de provisión. Se proporciona la estructura `add_dev` y
+se establecen las banderas apropiadas en `flag` para indicar que el dispositivo debe eliminarse después de la provisión, que la provisión debe comenzar de inmediato y que el dispositivo es
+compatible con "flushable" (se puede eliminar mediante comandos específicos).
+5. Si se agrega el dispositivo no provisionado correctamente, se incrementa `prov_start_num`.
+
+En resumen, esta función maneja la recepción de paquetes de publicidad de dispositivos no provisionados durante el proceso de provisión rápida en una red de malla Bluetooth. Si se cumplen
+las condiciones adecuadas, agrega el dispositivo no provisionado y comienza el proceso de provisión para dicho dispositivo.
+ */
+
+
+
+
+static void example_recv_unprov_adv_pkt(uint8_t dev_uuid[16], uint8_t addr[BLE_MESH_ADDR_LEN],
+                                        esp_ble_mesh_addr_type_t addr_type, uint16_t oob_info,
+                                        uint8_t adv_type, esp_ble_mesh_prov_bearer_t bearer)
+{
+    esp_ble_mesh_unprov_dev_add_t add_dev = {0};
+    esp_ble_mesh_dev_add_flag_t flag;
+    esp_err_t err;
+
+    /* In Fast Provisioning, the Provisioner should only use PB-ADV to provision devices. */
+    if (prov_start && (bearer & ESP_BLE_MESH_PROV_ADV)) {
+        /* Checks if the device is a reprovisioned one. */
+        if (example_is_node_exist(dev_uuid) == false) {
+            if ((prov_start_num >= fast_prov_server.max_node_num) ||
+                    (fast_prov_server.prov_node_cnt >= fast_prov_server.max_node_num)) {
+                return;
+            }
+        }
+
+        add_dev.addr_type = (uint8_t)addr_type;
+        add_dev.oob_info = oob_info;
+        add_dev.bearer = (uint8_t)bearer;
+        memcpy(add_dev.uuid, dev_uuid, 16);
+        memcpy(add_dev.addr, addr, BLE_MESH_ADDR_LEN);
+        flag = ADD_DEV_RM_AFTER_PROV_FLAG | ADD_DEV_START_PROV_NOW_FLAG | ADD_DEV_FLUSHABLE_DEV_FLAG;
+        err = esp_ble_mesh_provisioner_add_unprov_dev(&add_dev, flag);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "%s: Failed to start provisioning device", __func__);
+            return;
+        }
+
+        /* If adding unprovisioned device successfully, increase prov_start_num */
+        prov_start_num++;
+    }
+
+    return;
+}
+
+
+
+/*
+La función `example_ble_mesh_provisioning_cb` es un controlador de eventos para el módulo de provisión de Bluetooth de malla. Recibe eventos relacionados con la provisión y toma diferentes
+acciones según el tipo de evento. A continuación se muestra una descripción de las acciones realizadas para cada tipo de evento:
+
+- `ESP_BLE_MESH_PROV_REGISTER_COMP_EVT`: Indica que se ha completado el registro del módulo de provisión. Se registra un mensaje de información (`ESP_LOGI`) con el código de error.
+- `ESP_BLE_MESH_NODE_PROV_ENABLE_COMP_EVT`: Indica que se ha habilitado correctamente la provisión en el nodo. Se registra un mensaje de información con el código de error.
+- `ESP_BLE_MESH_NODE_PROV_LINK_OPEN_EVT`: Indica que se ha abierto un enlace de provisión con un dispositivo. Se registra un mensaje de información con el tipo de transporte utilizado
+(PB-ADV o PB-GATT).
+- `ESP_BLE_MESH_NODE_PROV_LINK_CLOSE_EVT`: Indica que se ha cerrado un enlace de provisión con un dispositivo. Se registra un mensaje de información con el tipo de transporte utilizado.
+- `ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT`: Indica que se ha completado la provisión de un nodo. Se llama a la función `node_prov_complete` para manejar el evento y se pasan los parámetros
+relacionados con el nodo provisto.
+- `ESP_BLE_MESH_NODE_PROXY_GATT_DISABLE_COMP_EVT`: Indica que se ha deshabilitado correctamente el proxy GATT en el nodo. Si el nodo provisorio tiene el rol primario, se deshabilita el relé
+en el servidor de configuración y se establece `prov_start` en `true`.
+- `ESP_BLE_MESH_PROVISIONER_RECV_UNPROV_ADV_PKT_EVT`: Indica que se ha recibido un paquete de publicidad de un dispositivo no provisionado. Se llama a la función `example_recv_unprov_adv_pkt`
+para manejar el evento y se pasan los parámetros relacionados con el dispositivo no provisionado.
+- `ESP_BLE_MESH_PROVISIONER_PROV_LINK_OPEN_EVT`: Indica que se ha abierto un enlace de provisión con el dispositivo provisionador. Se llama a la función `provisioner_prov_link_open` para
+manejar el evento y se pasa el tipo de transporte utilizado.
+- `ESP_BLE_MESH_PROVISIONER_PROV_LINK_CLOSE_EVT`: Indica que se ha cerrado un enlace de provisión con el dispositivo provisionador. Se llama a la función `provisioner_prov_link_close`
+para manejar el evento y se pasan el tipo de transporte utilizado y la razón del cierre del enlace.
+- `ESP_BLE_MESH_PROVISIONER_PROV_COMPLETE_EVT`: Indica que se ha completado la provisión de un dispositivo por parte del provisionador. Se llama a la función `provisioner_prov_complete`
+para manejar el evento y se pasan los parámetros relacionados con el dispositivo provisto.
+- `ESP_BLE_MESH_PROVISIONER_ADD_UNPROV_DEV_COMP_EVT`: Indica que se ha completado la adición de un dispositivo no provisionado por parte del provisionador. Se registra un mensaje de
+información con el código de error.
+- `ESP_BLE_MESH_PROVISIONER_SET_DEV_UUID_MATCH_COMP_EVT`: Indica que se ha completado la configuración de la coincidencia de UUID del dispositivo por parte del provisionador. Se
+registra un mensaje de información con el código de error.
+- `ESP_BLE_MESH_PROVISIONER_SET_NODE_NAME_COMP_EVT`: Indica que se ha complet
+ */
+
+static void example_ble_mesh_provisioning_cb(esp_ble_mesh_prov_cb_event_t event,
+        esp_ble_mesh_prov_cb_param_t *param)
+{
+    esp_err_t err;
+
+    switch (event) {
+    case ESP_BLE_MESH_PROV_REGISTER_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_PROV_REGISTER_COMP_EVT, err_code: %d",
+                 param->prov_register_comp.err_code);
+        break;
+    case ESP_BLE_MESH_NODE_PROV_ENABLE_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_ENABLE_COMP_EVT, err_code: %d",
+                 param->node_prov_enable_comp.err_code);
+        break;
+    case ESP_BLE_MESH_NODE_PROV_LINK_OPEN_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_LINK_OPEN_EVT, bearer: %s",
+                 param->node_prov_link_open.bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT");
+        break;
+    case ESP_BLE_MESH_NODE_PROV_LINK_CLOSE_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_LINK_CLOSE_EVT, bearer: %s",
+                 param->node_prov_link_close.bearer == ESP_BLE_MESH_PROV_ADV ? "PB-ADV" : "PB-GATT");
+        break;
+    case ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROV_COMPLETE_EVT");
+        node_prov_complete(param->node_prov_complete.net_idx, param->node_prov_complete.addr,
+            param->node_prov_complete.flags, param->node_prov_complete.iv_index);
+        break;
+    case ESP_BLE_MESH_NODE_PROXY_GATT_DISABLE_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_NODE_PROXY_GATT_DISABLE_COMP_EVT");
+        if (fast_prov_server.primary_role == true) {
+            config_server.relay = ESP_BLE_MESH_RELAY_DISABLED;
+        }
+        prov_start = true;
+        break;
+    case ESP_BLE_MESH_PROVISIONER_RECV_UNPROV_ADV_PKT_EVT:
+        example_recv_unprov_adv_pkt(param->provisioner_recv_unprov_adv_pkt.dev_uuid, param->provisioner_recv_unprov_adv_pkt.addr,
+                                    param->provisioner_recv_unprov_adv_pkt.addr_type, param->provisioner_recv_unprov_adv_pkt.oob_info,
+                                    param->provisioner_recv_unprov_adv_pkt.adv_type, param->provisioner_recv_unprov_adv_pkt.bearer);
+        break;
+    case ESP_BLE_MESH_PROVISIONER_PROV_LINK_OPEN_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_PROV_LINK_OPEN_EVT");
+        provisioner_prov_link_open(param->provisioner_prov_link_open.bearer);
+        break;
+    case ESP_BLE_MESH_PROVISIONER_PROV_LINK_CLOSE_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_PROV_LINK_CLOSE_EVT");
+        provisioner_prov_link_close(param->provisioner_prov_link_close.bearer,
+                                    param->provisioner_prov_link_close.reason);
+        break;
+    case ESP_BLE_MESH_PROVISIONER_PROV_COMPLETE_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_PROV_COMPLETE_EVT");
+        provisioner_prov_complete(param->provisioner_prov_complete.node_idx,
+                                  param->provisioner_prov_complete.device_uuid,
+                                  param->provisioner_prov_complete.unicast_addr,
+                                  param->provisioner_prov_complete.element_num,
+                                  param->provisioner_prov_complete.netkey_idx);
+        break;
+    case ESP_BLE_MESH_PROVISIONER_ADD_UNPROV_DEV_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_ADD_UNPROV_DEV_COMP_EVT, err_code: %d",
+                 param->provisioner_add_unprov_dev_comp.err_code);
+        break;
+    case ESP_BLE_MESH_PROVISIONER_SET_DEV_UUID_MATCH_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_SET_DEV_UUID_MATCH_COMP_EVT, err_code: %d",
+                 param->provisioner_set_dev_uuid_match_comp.err_code);
+        break;
+    case ESP_BLE_MESH_PROVISIONER_SET_NODE_NAME_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_PROVISIONER_SET_NODE_NAME_COMP_EVT, err_code: %d",
+                 param->provisioner_set_node_name_comp.err_code);
+        break;
+    case ESP_BLE_MESH_SET_FAST_PROV_INFO_COMP_EVT: {
+        ESP_LOGI(TAG, "ESP_BLE_MESH_SET_FAST_PROV_INFO_COMP_EVT");
+        ESP_LOGI(TAG, "status_unicast: 0x%02x, status_net_idx: 0x%02x, status_match 0x%02x",
+                 param->set_fast_prov_info_comp.status_unicast,
+                 param->set_fast_prov_info_comp.status_net_idx,
+                 param->set_fast_prov_info_comp.status_match);
+        err = example_handle_fast_prov_info_set_comp_evt(fast_prov_server.model,
+                param->set_fast_prov_info_comp.status_unicast,
+                param->set_fast_prov_info_comp.status_net_idx,
+                param->set_fast_prov_info_comp.status_match);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "%s: Failed to handle Fast Prov Info Set complete event", __func__);
+            return;
+        }
+        break;
+    }
+    case ESP_BLE_MESH_SET_FAST_PROV_ACTION_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_SET_FAST_PROV_ACTION_COMP_EVT, status_action 0x%02x",
+                 param->set_fast_prov_action_comp.status_action);
+        err = example_handle_fast_prov_action_set_comp_evt(fast_prov_server.model,
+                param->set_fast_prov_action_comp.status_action);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "%s: Failed to handle Fast Prov Action Set complete event", __func__);
+            return;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return;
+}
+
+
+
+/*
+La función `example_ble_mesh_custom_model_cb` es un controlador de eventos para un modelo personalizado en el módulo de Bluetooth de malla. Recibe eventos relacionados con las operaciones
+del modelo y toma diferentes acciones según el tipo de evento. A continuación se muestra una descripción de las acciones realizadas para cada tipo de evento:
+
+- `ESP_BLE_MESH_MODEL_OPERATION_EVT`: Indica que se ha recibido una operación de modelo. Se verifica si los parámetros necesarios (`model`, `op`, `ctx`) no son nulos. Luego se obtiene el
+código de operación (`opcode`) y se realizan acciones específicas según el código de operación.
+  - Para códigos de operación relacionados con el modelo de provisión rápida (`ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_SET`, `ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_ADD`, etc.), se
+  registra un mensaje de información con el opcode y se llama a la función `example_fast_prov_server_recv_msg` para manejar el mensaje recibido.
+  - Para códigos de operación relacionados con el estado del modelo de provisión rápida (`ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_STATUS`,
+  `ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_STATUS`, etc.), se registra un mensaje de información con el opcode y se llama a la función `example_fast_prov_client_recv_status`
+  para manejar el estado recibido.
+  - Para otros códigos de operación, se registra un mensaje de información con el opcode.
+
+- `ESP_BLE_MESH_MODEL_SEND_COMP_EVT`: Indica que se ha completado el envío de un mensaje de modelo. Se registra un mensaje de información con el código de error. Luego, según el opcode
+ del mensaje enviado, se llama a la función `example_handle_fast_prov_status_send_comp_evt` para manejar el evento de envío completo.
+
+- `ESP_BLE_MESH_MODEL_PUBLISH_COMP_EVT`: Indica que se ha completado la publicación de un mensaje de modelo. Se registra un mensaje de información con el código de error.
+
+- `ESP_BLE_MESH_CLIENT_MODEL_RECV_PUBLISH_MSG_EVT`: Indica que el modelo del cliente ha recibido un mensaje publicado. Se registra un mensaje de información con el opcode del mensaje
+recibido.
+
+- `ESP_BLE_MESH_CLIENT_MODEL_SEND_TIMEOUT_EVT`: Indica que ha ocurrido un tiempo de espera al enviar un mensaje de modelo desde el cliente. Se registra un mensaje de información con
+el opcode y la dirección de destino. Luego se llama a la función `example_fast_prov_client_recv_timeout` para manejar el tiempo de espera y reenviar el mensaje si es necesario.
+
+
+ */
+
+static void example_ble_mesh_custom_model_cb(esp_ble_mesh_model_cb_event_t event,
+        esp_ble_mesh_model_cb_param_t *param)
+{
+    uint32_t opcode;
+    esp_err_t err;
+
+    switch (event) {
+    case ESP_BLE_MESH_MODEL_OPERATION_EVT: {
+        if (!param->model_operation.model || !param->model_operation.model->op ||
+                !param->model_operation.ctx) {
+            ESP_LOGE(TAG, "%s: model_operation parameter is NULL", __func__);
+            return;
+        }
+        opcode = param->model_operation.opcode;
+        switch (opcode) {
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_SET:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_ADD:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_GET:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_GROUP_ADD:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_GROUP_DELETE: {
+            ESP_LOGI(TAG, "%s: Fast prov server receives msg, opcode 0x%04" PRIx32, __func__, opcode);
+            struct net_buf_simple buf = {
+                .len = param->model_operation.length,
+                .data = param->model_operation.msg,
+            };
+            err = example_fast_prov_server_recv_msg(param->model_operation.model,
+                                                    param->model_operation.ctx, &buf);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "%s: Failed to handle fast prov client message", __func__);
+                return;
+            }
+            break;
+        }
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_STATUS:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_STATUS:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_ACK: {
+            ESP_LOGI(TAG, "%s: Fast prov client receives msg, opcode 0x%04" PRIx32, __func__, opcode);
+            err = example_fast_prov_client_recv_status(param->model_operation.model,
+                    param->model_operation.ctx,
+                    param->model_operation.length,
+                    param->model_operation.msg);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "%s: Failed to handle fast prov server message", __func__);
+                return;
+            }
+            break;
+        }
+        default:
+            ESP_LOGI(TAG, "%s: opcode 0x%04" PRIx32, __func__, param->model_operation.opcode);
+            break;
+        }
+        break;
+    }
+    case ESP_BLE_MESH_MODEL_SEND_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_SEND_COMP_EVT, err_code %d", param->model_send_comp.err_code);
+        switch (param->model_send_comp.opcode) {
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_INFO_STATUS:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NET_KEY_STATUS:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_ACK:
+        case ESP_BLE_MESH_VND_MODEL_OP_FAST_PROV_NODE_ADDR_STATUS:
+            err = example_handle_fast_prov_status_send_comp_evt(param->model_send_comp.err_code,
+                    param->model_send_comp.opcode,
+                    param->model_send_comp.model,
+                    param->model_send_comp.ctx);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "%s: Failed to handle fast prov status send complete event", __func__);
+                return;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+    case ESP_BLE_MESH_MODEL_PUBLISH_COMP_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_PUBLISH_COMP_EVT, err_code %d",
+                 param->model_publish_comp.err_code);
+        break;
+    case ESP_BLE_MESH_CLIENT_MODEL_RECV_PUBLISH_MSG_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_MODEL_CLIENT_RECV_PUBLISH_MSG_EVT, opcode 0x%04" PRIx32,
+                 param->client_recv_publish_msg.opcode);
+        break;
+    case ESP_BLE_MESH_CLIENT_MODEL_SEND_TIMEOUT_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_CLIENT_MODEL_SEND_TIMEOUT_EVT, opcode 0x%04" PRIx32 ", dst 0x%04x",
+                 param->client_send_timeout.opcode, param->client_send_timeout.ctx->addr);
+        err = example_fast_prov_client_recv_timeout(param->client_send_timeout.opcode,
+                param->client_send_timeout.model,
+                param->client_send_timeout.ctx);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "%s: Faield to resend fast prov client message", __func__);
+            return;
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+
+/*
+ La función `example_ble_mesh_config_client_cb` es un controlador de eventos para el cliente de configuración en el módulo de Bluetooth de malla. Recibe diferentes eventos relacionados con
+ las operaciones de configuración y toma diferentes acciones según el tipo de evento. A continuación se muestra una
+ descripción de las acciones realizadas para cada tipo de evento:
+
+- `ESP_BLE_MESH_CFG_CLIENT_GET_STATE_EVT`: Indica que se ha recibido un estado de respuesta de configuración. No se realiza ninguna acción en este caso.
+
+- `ESP_BLE_MESH_CFG_CLIENT_SET_STATE_EVT`: Indica que se ha recibido un estado de configuración después de enviar un mensaje de configuración. Se verifica el código de operación (`opcode`)
+y se realizan acciones específicas según el opcode.
+  - Para el código de operación `ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD`, se realiza lo siguiente:
+    - Se obtiene la información del nodo correspondiente a la dirección de destino.
+    - Si no se encuentra la información del nodo, se registra un mensaje de error y se retorna.
+    - Si hay un código de error en los parámetros (`param->error_code`), se registra un mensaje de error y se retorna.
+    - Si el nodo está en modo de reprov (reprov = true), no se realiza ninguna acción adicional.
+    - Si no hay suficientes direcciones disponibles (`unicast_cur >= unicast_max`), se registra un mensaje de advertencia y se marca `lack_of_addr` en el nodo como verdadero.
+    - De lo contrario, se configuran los valores necesarios en la estructura `node` y se actualizan las variables correspondientes.
+    - Se configuran los valores necesarios en la estructura `set` para el mensaje `fast_prov_info_set`.
+    - Se llama a la función `example_send_fast_prov_info_set` para enviar el mensaje `fast_prov_info_set` al nodo.
+
+- `ESP_BLE_MESH_CFG_CLIENT_PUBLISH_EVT`: Indica que se ha completado la publicación de un mensaje de configuración. No se realiza ninguna acción en este caso.
+
+- `ESP_BLE_MESH_CFG_CLIENT_TIMEOUT_EVT`: Indica que ha ocurrido un tiempo de espera al enviar un mensaje de configuración. Se verifica el código de operación (`opcode`) y se realizan
+acciones específicas según el opcode.
+  - Para el código de operación `ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD`, se vuelve a enviar el mensaje `Config AppKey Add` al nodo correspondiente.
+
+- Otros eventos: No se realiza ninguna acción y se retorna.
+
+En general, esta función maneja los eventos relacionados con las operaciones de configuración del cliente, realiza acciones específicas según el tipo de evento y el código de operación, y
+envía mensajes correspondientes a otros modelos en función del estado y los resultados de las operaciones de configuración.
+ */
+
+
+static void example_ble_mesh_config_client_cb(esp_ble_mesh_cfg_client_cb_event_t event,
+        esp_ble_mesh_cfg_client_cb_param_t *param)
+{
+    example_node_info_t *node = NULL;
+    uint32_t opcode;
+    uint16_t address;
+    esp_err_t err;
+
+    ESP_LOGI(TAG, "%s, error_code = 0x%02x, event = 0x%02x, addr: 0x%04x",
+             __func__, param->error_code, event, param->params->ctx.addr);
+
+    opcode = param->params->opcode;
+    address = param->params->ctx.addr;
+
+    node = example_get_node_info(address);
+    if (!node) {
+        ESP_LOGE(TAG, "%s: Failed to get node info", __func__);
+        return;
+    }
+
+    if (param->error_code) {
+        ESP_LOGE(TAG, "Failed to send config client message, opcode: 0x%04" PRIx32, opcode);
+        return;
+    }
+
+    switch (event) {
+    case ESP_BLE_MESH_CFG_CLIENT_GET_STATE_EVT:
+        break;
+    case ESP_BLE_MESH_CFG_CLIENT_SET_STATE_EVT:
+        switch (opcode) {
+        case ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD: {
+            example_fast_prov_info_set_t set = {0};
+            if (node->reprov == false) {
+                /* After sending Config AppKey Add successfully, start to send Fast Prov Info Set */
+                if (fast_prov_server.unicast_cur >= fast_prov_server.unicast_max) {
+                    /* TODO:
+                     * 1. If unicast_cur is >= unicast_max, we can also send the message to enable
+                     * the Provisioner functionality on the node, and need to add another vendor
+                     * message used by the node to require a new unicast address range from primary
+                     * Provisioner, and before get the correct response, the node should pend
+                     * the fast provisioning functionality.
+                     * 2. Currently if address is not enough, the Provisioner will only add the group
+                     * address to the node.
+                     */
+                    ESP_LOGW(TAG, "%s: Not enough address to be assigned", __func__);
+                    node->lack_of_addr = true;
+                } else {
+                    /* Send fast_prov_info_set message to node */
+                    node->lack_of_addr = false;
+                    node->unicast_min = fast_prov_server.unicast_cur;
+                    if (fast_prov_server.unicast_cur + fast_prov_server.unicast_step >= fast_prov_server.unicast_max) {
+                        node->unicast_max = fast_prov_server.unicast_max;
+                    } else {
+                        node->unicast_max = fast_prov_server.unicast_cur + fast_prov_server.unicast_step;
+                    }
+                    node->flags      = fast_prov_server.flags;
+                    node->iv_index   = fast_prov_server.iv_index;
+                    node->fp_net_idx = fast_prov_server.net_idx;
+                    node->group_addr = fast_prov_server.group_addr;
+                    node->prov_addr  = fast_prov_server.prim_prov_addr;
+                    node->match_len  = fast_prov_server.match_len;
+                    memcpy(node->match_val, fast_prov_server.match_val, fast_prov_server.match_len);
+                    node->action = FAST_PROV_ACT_ENTER;
+                    fast_prov_server.unicast_cur = node->unicast_max + 1;
+                }
+            }
+            if (node->lack_of_addr == false) {
+                set.ctx_flags = 0x03FE;
+                memcpy(&set.unicast_min, &node->unicast_min,
+                       sizeof(example_node_info_t) - offsetof(example_node_info_t, unicast_min));
+            } else {
+                set.ctx_flags  = BIT(6);
+                set.group_addr = fast_prov_server.group_addr;
+            }
+            example_msg_common_info_t info = {
+                .net_idx = node->net_idx,
+                .app_idx = node->app_idx,
+                .dst = node->unicast_addr,
+                .timeout = 0,
+                .role = ROLE_FAST_PROV,
+            };
+            err = example_send_fast_prov_info_set(fast_prov_client.model, &info, &set);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "%s: Failed to send Fast Prov Info Set message", __func__);
+                return;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        break;
+    case ESP_BLE_MESH_CFG_CLIENT_PUBLISH_EVT:
+        break;
+    case ESP_BLE_MESH_CFG_CLIENT_TIMEOUT_EVT:
+        switch (opcode) {
+        case ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD: {
+            example_msg_common_info_t info = {
+                .net_idx = node->net_idx,
+                .app_idx = node->app_idx,
+                .dst = node->unicast_addr,
+                .timeout = 0,
+                .role = ROLE_FAST_PROV,
+            };
+            err = example_send_config_appkey_add(config_client.model, &info, NULL);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "%s: Failed to send Config AppKey Add message", __func__);
+                return;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        break;
+    default:
+        return;
+    }
+}
+
+static void example_ble_mesh_config_server_cb(esp_ble_mesh_cfg_server_cb_event_t event,
+        esp_ble_mesh_cfg_server_cb_param_t *param)
+{
+    esp_err_t err;
+
+    ESP_LOGI(TAG, "%s, event = 0x%02x, opcode = 0x%04" PRIx32 ", addr: 0x%04x",
+             __func__, event, param->ctx.recv_op, param->ctx.addr);
+
+    switch (event) {
+    case ESP_BLE_MESH_CFG_SERVER_STATE_CHANGE_EVT:
+        switch (param->ctx.recv_op) {
+        case ESP_BLE_MESH_MODEL_OP_APP_KEY_ADD:
+            ESP_LOGI(TAG, "Config Server get Config AppKey Add");
+            err = example_handle_config_app_key_add_evt(param->value.state_change.appkey_add.app_idx);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "%s: Failed to bind app_idx 0x%04x with non-config models",
+                    __func__, param->value.state_change.appkey_add.app_idx);
+                return;
+            }
+            break;
+        default:
+            break;
+        }
+        break;
+    default:
+        return;
+    }
+}
+
+
+
+/*
+ La función `example_ble_mesh_generic_server_cb` es un controlador de eventos para el servidor genérico en el módulo de Bluetooth de malla. Recibe diferentes eventos relacionados con el
+ cambio de estado en el servidor genérico y toma
+ acciones específicas según el evento y el código de operación. A continuación se muestra una descripción de las acciones realizadas para cada tipo de evento:
+
+- `ESP_BLE_MESH_GENERIC_SERVER_STATE_CHANGE_EVT`: Indica que ha ocurrido un cambio de estado en el servidor genérico. Se verifica el código de operación (`param->ctx.recv_op`) para
+determinar qué tipo de cambio de estado ha ocurrido. En este caso, se verifica si el código de operación es `ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET` o
+`ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET_UNACK`, que indica un cambio de estado de encendido/apagado.
+  - Si es un cambio de estado de encendido (`onoff_set.onoff = 0x01`), se registra un mensaje de información y se llama a la función `example_change_led_state` para cambiar el estado
+  del LED.
+  - Si es un cambio de estado de apagado (`onoff_set.onoff = 0x00`), se registra un mensaje de información y se llama a la función `example_change_led_state` para cambiar el estado
+  del LED.
+
+La función `ble_mesh_init` es responsable de inicializar el módulo de Bluetooth de malla. Realiza las siguientes acciones:
+
+- Registra los controladores de eventos correspondientes para el proceso de provisión, modelos personalizados, cliente de configuración, servidor de configuración y servidor genérico.
+- Inicializa el módulo de Bluetooth de malla llamando a `esp_ble_mesh_init` con los objetos de configuración `prov` y `comp`.
+- Inicializa el modelo de servidor de provisión rápida llamando a `example_fast_prov_server_init`.
+- Inicializa el modelo de cliente de provisión rápida llamando a `esp_ble_mesh_client_model_init`.
+- Inicializa un temporizador llamado `send_self_prov_node_addr_timer` utilizando `k_delayed_work_init`.
+- Habilita el proceso de provisión de nodos llamando a `esp_ble_mesh_node_prov_enable` con las banderas `ESP_BLE_MESH_PROV_ADV` y `ESP_BLE_MESH_PROV_GATT`.
+- Registra un mensaje de información indicando que el nodo de provisión rápida de Bluetooth de malla se ha inicializado correctamente.
+- Realiza una operación de encendido del LED B.
+
+En resumen, la función `ble_mesh_init` configura y habilita el módulo de Bluetooth de malla, inicializa los modelos necesarios y realiza las operaciones iniciales para el nodo de provisión
+rápida de Bluetooth de malla.
+ */
+
+
+
+static void example_ble_mesh_generic_server_cb(esp_ble_mesh_generic_server_cb_event_t event,
+                                               esp_ble_mesh_generic_server_cb_param_t *param)
+{
+    ESP_LOGI(TAG, "event 0x%02x, opcode 0x%04" PRIx32 ", src 0x%04x, dst 0x%04x",
+        event, param->ctx.recv_op, param->ctx.addr, param->ctx.recv_dst);
+
+    switch (event) {
+    case ESP_BLE_MESH_GENERIC_SERVER_STATE_CHANGE_EVT:
+        ESP_LOGI(TAG, "ESP_BLE_MESH_GENERIC_SERVER_STATE_CHANGE_EVT");
+        if (param->ctx.recv_op == ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET ||
+            param->ctx.recv_op == ESP_BLE_MESH_MODEL_OP_GEN_ONOFF_SET_UNACK) {
+            ESP_LOGI(TAG, "onoff 0x%02x", param->value.state_change.onoff_set.onoff);
+            example_change_led_state(param->value.state_change.onoff_set.onoff);
+        }
+        break;
+    default:
+        ESP_LOGW(TAG, "Unknown Generic Server event 0x%02x", event);
+        break;
+    }
+}
+
+static esp_err_t ble_mesh_init(void)
+{
+    esp_err_t err;
+
+    esp_ble_mesh_register_prov_callback(example_ble_mesh_provisioning_cb);
+    esp_ble_mesh_register_custom_model_callback(example_ble_mesh_custom_model_cb);
+    esp_ble_mesh_register_config_client_callback(example_ble_mesh_config_client_cb);
+    esp_ble_mesh_register_config_server_callback(example_ble_mesh_config_server_cb);
+    esp_ble_mesh_register_generic_server_callback(example_ble_mesh_generic_server_cb);
+
+    err = esp_ble_mesh_init(&prov, &comp);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s: Failed to initialize BLE Mesh", __func__);
+        return err;
+    }
+
+    err = example_fast_prov_server_init(&vnd_models[0]);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s: Failed to initialize fast prov server model", __func__);
+        return err;
+    }
+
+    err = esp_ble_mesh_client_model_init(&vnd_models[1]);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s: Failed to initialize fast prov client model", __func__);
+        return err;
+    }
+
+    k_delayed_work_init(&send_self_prov_node_addr_timer, example_send_self_prov_node_addr);
+
+    err = esp_ble_mesh_node_prov_enable(ESP_BLE_MESH_PROV_ADV | ESP_BLE_MESH_PROV_GATT);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "%s: Failed to enable node provisioning", __func__);
+        return err;
+    }
+
+    ESP_LOGI(TAG, "BLE Mesh Fast Prov Node initialized");
+
+    board_led_operation(LED_B, LED_ON);
+
+    return ESP_OK;
+}
+
+
+void save_variables() {
+    // Inicializar el almacenamiento NVS
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // No hay suficiente espacio libre en la memoria flash, borrar el almacenamiento NVS
+        nvs_flash_erase();
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
+    // Abrir el espacio de almacenamiento
+    nvs_handle_t nvs_handle;
+    err = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle);
+    ESP_ERROR_CHECK(err);
+
+    // Guardar las variables en el almacenamiento NVS
+    int32_t variable1 = 123;
+    int32_t variable2 = 456;
+    float variable3 = 3.14;
+
+    // Guardar la variable1
+        err = nvs_set_i32(nvs_handle, VAR1_KEY, variable1);
+        ESP_ERROR_CHECK(err);
+
+        // Guardar la variable2
+        err = nvs_set_i32(nvs_handle, VAR2_KEY, variable2);
+        ESP_ERROR_CHECK(err);
+
+        // Guardar la variable3
+        err = nvs_set_blob(nvs_handle, VAR3_KEY, &variable3, sizeof(float));
+        ESP_ERROR_CHECK(err);
+
+        // Aplicar los cambios y cerrar el espacio de almacenamiento
+        err = nvs_commit(nvs_handle);
+        ESP_ERROR_CHECK(err);
+
+        nvs_close(nvs_handle);
+    }
+
+
+
+
+
+void app_main(void)
+{
+    esp_err_t err;
+
+    ESP_LOGI(TAG, "Initializing...");
+
+    err = board_init();
+    if (err) {
+        ESP_LOGE(TAG, "board_init failed (err %d)", err);
+        return;
+    }
+
+    err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        err = nvs_flash_init();
+    }
+    ESP_ERROR_CHECK(err);
+
+    err = bluetooth_init();
+    if (err) {
+        ESP_LOGE(TAG, "esp32_bluetooth_init failed (err %d)", err);
+        return;
+    }
+
+    ble_mesh_get_dev_uuid(dev_uuid);
+
+    /* Initialize the Bluetooth Mesh Subsystem */
+    err = ble_mesh_init();
+    if (err) {
+        ESP_LOGE(TAG, "Bluetooth mesh init failed (err %d)", err);
+        return;
+    }
+}
